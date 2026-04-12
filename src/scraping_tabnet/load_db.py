@@ -1,5 +1,7 @@
 import csv
+import re
 import os
+from collections import defaultdict
 from pathlib import Path
 
 import psycopg2
@@ -17,34 +19,55 @@ DB = dict(
     password=os.environ["DB_PASSWORD"],
 )
 
-CREATE_TABLE_SQL = """
-CREATE TABLE IF NOT EXISTS producao_ambulatorial (
-    periodo     VARCHAR(10)  NOT NULL,
-    conteudo    VARCHAR(50)  NOT NULL,
-    municipio   TEXT         NOT NULL,
-    subgrupo    TEXT         NOT NULL,
-    valor       TEXT,
-    PRIMARY KEY (periodo, conteudo, municipio, subgrupo)
-);
-"""
-
-INSERT_SQL = """
-INSERT INTO producao_ambulatorial (periodo, conteudo, municipio, subgrupo, valor)
-VALUES %s
-ON CONFLICT (periodo, conteudo, municipio, subgrupo) DO UPDATE
-    SET valor = EXCLUDED.valor;
-"""
+IGNORED_MUNICIPIOS = re.compile(r"total|ignorado", re.IGNORECASE)
 
 
 def connect():
     return psycopg2.connect(**DB, connect_timeout=10)
 
 
-def ensure_table(conn) -> None:
+def extract_subgrupo_numbers(header: list[str]) -> list[str]:
+    """Extrai os números do início dos nomes de subgrupo (colunas 3+).
+    Ex: '0101 Ações de promoção...' → '0101'
+    Ignora coluna 'Total'.
+    """
+    numbers = []
+    for col in header[3:]:
+        stripped = col.strip()
+        if stripped.lower() == "total":
+            continue
+        match = re.match(r"(\d+)", stripped)
+        if match:
+            numbers.append(match.group(1))
+        else:
+            numbers.append(stripped)
+    return numbers
+
+
+def build_dynamic_columns(subgrupo_numbers: list[str]) -> list[str]:
+    """Gera lista de colunas dinâmicas: qtd_01, val_01, qtd_02, val_02, ..."""
+    cols = []
+    for num in subgrupo_numbers:
+        cols.append(f"qtd_{num}")
+        cols.append(f"val_{num}")
+    return cols
+
+
+def recreate_table(conn, dynamic_cols: list[str]) -> None:
+    col_defs = ",\n    ".join(f"{col} TEXT" for col in dynamic_cols)
+    sql = f"""
+    DROP TABLE IF EXISTS producao_ambulatorial;
+    CREATE TABLE producao_ambulatorial (
+        periodo     VARCHAR(10)  NOT NULL,
+        municipio   TEXT         NOT NULL,
+        {col_defs},
+        PRIMARY KEY (periodo, municipio)
+    );
+    """
     with conn.cursor() as cur:
-        cur.execute(CREATE_TABLE_SQL)
+        cur.execute(sql)
     conn.commit()
-    print("Tabela 'producao_ambulatorial' verificada/criada.")
+    print("Tabela 'producao_ambulatorial' recriada com novo schema.")
 
 
 def load_csv(path: Path) -> tuple[list[str], list[list[str]]]:
@@ -55,24 +78,65 @@ def load_csv(path: Path) -> tuple[list[str], list[list[str]]]:
     return header, rows
 
 
-def melt(header: list[str], rows: list[list[str]]) -> list[tuple]:
-    """Converte formato wide para long: uma linha por (período, conteúdo, município, subgrupo)."""
-    # header: [Período, Conteúdo, Município, subgrupo1, subgrupo2, ...]
-    subgrupos = header[3:]
-    records = []
+def pivot(header: list[str], rows: list[list[str]], subgrupo_numbers: list[str]) -> list[tuple]:
+    """Agrupa por (periodo, municipio) e pivota qtd/val em colunas separadas."""
+    dynamic_cols = build_dynamic_columns(subgrupo_numbers)
+
+    # Mapeia índice original no CSV → número do subgrupo (excluindo Total)
+    col_index_map: list[tuple[int, str]] = []
+    for i, col in enumerate(header[3:]):
+        stripped = col.strip()
+        if stripped.lower() == "total":
+            continue
+        match = re.match(r"(\d+)", stripped)
+        num = match.group(1) if match else stripped
+        col_index_map.append((i, num))
+
+    # Agrupa: chave (periodo, municipio) → {qtd_XX: val, val_XX: val}
+    grouped: dict[tuple[str, str], dict[str, str]] = defaultdict(dict)
+
     for row in rows:
         if len(row) < 4:
             continue
+
         periodo, conteudo, municipio = row[0], row[1], row[2]
+
+        # Ignorar Total e Município ignorado
+        if IGNORED_MUNICIPIOS.search(municipio):
+            continue
+
         valores = row[3:]
-        for subgrupo, valor in zip(subgrupos, valores):
-            records.append((periodo, conteudo, municipio, subgrupo, valor))
+        prefix = "qtd" if "qtd" in conteudo.lower() else "val"
+
+        for csv_idx, num in col_index_map:
+            col_name = f"{prefix}_{num}"
+            valor = valores[csv_idx] if csv_idx < len(valores) else None
+            grouped[(periodo, municipio)][col_name] = valor
+
+    # Montar registros na ordem correta
+    records = []
+    for (periodo, municipio), col_vals in grouped.items():
+        values = [periodo, municipio]
+        for col in dynamic_cols:
+            values.append(col_vals.get(col))
+        records.append(tuple(values))
+
     return records
 
 
-def insert(conn, records: list[tuple]) -> None:
+def insert(conn, records: list[tuple], dynamic_cols: list[str]) -> None:
+    all_cols = ["periodo", "municipio"] + dynamic_cols
+    col_names = ", ".join(all_cols)
+    update_set = ", ".join(f"{col} = EXCLUDED.{col}" for col in dynamic_cols)
+
+    sql = f"""
+    INSERT INTO producao_ambulatorial ({col_names})
+    VALUES %s
+    ON CONFLICT (periodo, municipio) DO UPDATE
+        SET {update_set};
+    """
     with conn.cursor() as cur:
-        psycopg2.extras.execute_values(cur, INSERT_SQL, records, page_size=1000)
+        psycopg2.extras.execute_values(cur, sql, records, page_size=1000)
     conn.commit()
 
 
@@ -81,23 +145,27 @@ def main() -> None:
     if not path.exists():
         raise FileNotFoundError(f"Arquivo não encontrado: {path.resolve()}")
 
-    print(f"Conectando ao banco...")
+    print(f"Lendo {path}...")
+    header, rows = load_csv(path)
+    print(f"  {len(rows)} linhas de dados.")
+
+    subgrupo_numbers = extract_subgrupo_numbers(header)
+    dynamic_cols = build_dynamic_columns(subgrupo_numbers)
+    print(f"  {len(subgrupo_numbers)} subgrupos detectados: {subgrupo_numbers}")
+
+    print("Pivotando dados (qtd/val como colunas)...")
+    records = pivot(header, rows, subgrupo_numbers)
+    print(f"  {len(records)} registros após pivot (sem Total/ignorado).")
+
+    print("Conectando ao banco...")
     conn = connect()
     print("Conexão OK.")
 
-    ensure_table(conn)
-
-    print(f"Lendo {path}...")
-    header, rows = load_csv(path)
-    print(f"  {len(rows)} linhas de dados, {len(header) - 3} subgrupos.")
-
-    print("Convertendo para formato long...")
-    records = melt(header, rows)
-    print(f"  {len(records)} registros a inserir.")
+    recreate_table(conn, dynamic_cols)
 
     print("Inserindo no banco (upsert)...")
-    insert(conn, records)
-    print(f"  Concluído!")
+    insert(conn, records, dynamic_cols)
+    print("Concluído!")
 
     conn.close()
 

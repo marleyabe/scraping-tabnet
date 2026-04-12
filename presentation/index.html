@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<title>Scraping TabNet — DATASUS</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg: #0f172a;
+  --bg2: #1e293b;
+  --accent: #38bdf8;
+  --accent2: #818cf8;
+  --text: #e2e8f0;
+  --muted: #94a3b8;
+  --code-bg: #020617;
+}
+
+body {
+  font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+  background: linear-gradient(135deg, var(--bg) 0%, var(--bg2) 100%);
+  color: var(--text);
+  height: 100vh;
+  overflow: hidden;
+}
+
+.deck { width: 100vw; height: 100vh; position: relative; }
+
+.slide {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 80px;
+  opacity: 0;
+  transform: translateX(40px);
+  transition: opacity 0.4s ease, transform 0.4s ease;
+  pointer-events: none;
+}
+
+.slide.active { opacity: 1; transform: translateX(0); pointer-events: auto; }
+
+.content { max-width: 1100px; width: 100%; }
+
+h1 {
+  font-size: 4rem;
+  background: linear-gradient(90deg, var(--accent), var(--accent2));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  margin-bottom: 1rem;
+}
+
+h2 {
+  font-size: 2.4rem;
+  margin-bottom: 1.5rem;
+  color: var(--accent);
+  border-bottom: 2px solid rgba(56, 189, 248, 0.3);
+  padding-bottom: 0.5rem;
+}
+
+h3 { font-size: 1.4rem; margin: 1.5rem 0 0.8rem; color: var(--accent2); }
+
+p, li { font-size: 1.15rem; line-height: 1.7; margin-bottom: 0.5rem; }
+
+ul, ol { margin-left: 1.5rem; margin-bottom: 1rem; }
+
+ul ul { margin-top: 0.3rem; margin-bottom: 0.3rem; }
+
+.subtitle { font-size: 1.5rem; color: var(--muted); margin-top: 1rem; }
+
+.author { font-size: 1rem; color: var(--muted); margin-top: 3rem; font-style: italic; }
+
+code {
+  background: var(--code-bg);
+  color: var(--accent);
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-family: "JetBrains Mono", "Fira Code", monospace;
+  font-size: 0.95em;
+}
+
+.code {
+  background: var(--code-bg);
+  color: #cbd5e1;
+  padding: 18px 22px;
+  border-radius: 8px;
+  font-family: "JetBrains Mono", "Fira Code", monospace;
+  font-size: 0.9rem;
+  overflow-x: auto;
+  margin: 1rem 0;
+  border-left: 3px solid var(--accent);
+  white-space: pre;
+}
+
+.callout {
+  background: rgba(56, 189, 248, 0.1);
+  border-left: 4px solid var(--accent);
+  padding: 1rem 1.5rem;
+  margin-top: 1.5rem;
+  border-radius: 6px;
+  font-size: 1.1rem;
+}
+
+.flow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 2rem 0;
+  flex-wrap: wrap;
+}
+
+.box {
+  background: var(--bg2);
+  border: 1px solid rgba(56, 189, 248, 0.4);
+  border-radius: 8px;
+  padding: 14px 16px;
+  text-align: center;
+  font-weight: 600;
+  font-size: 0.95rem;
+  flex: 1;
+  min-width: 120px;
+}
+
+.box small {
+  display: block;
+  font-weight: 400;
+  color: var(--muted);
+  margin-top: 4px;
+  font-size: 0.8rem;
+}
+
+.arrow { color: var(--accent); font-size: 1.5rem; font-weight: bold; }
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1rem;
+  margin: 1.5rem 0;
+}
+
+.stat {
+  background: var(--bg2);
+  border-radius: 10px;
+  padding: 1.2rem;
+  text-align: center;
+  border-top: 3px solid var(--accent);
+}
+
+.stat .num { display: block; font-size: 2rem; font-weight: 700; color: var(--accent); }
+
+.stat span:last-child { font-size: 0.9rem; color: var(--muted); }
+
+.thanks {
+  font-size: 2rem;
+  text-align: center;
+  margin-top: 2rem;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.nav {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: rgba(2, 6, 23, 0.7);
+  padding: 8px 16px;
+  border-radius: 30px;
+  backdrop-filter: blur(8px);
+}
+
+.nav button {
+  background: var(--accent);
+  color: var(--bg);
+  border: none;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  font-size: 1.2rem;
+  font-weight: bold;
+  cursor: pointer;
+  transition: transform 0.15s;
+}
+
+.nav button:hover { transform: scale(1.1); }
+
+#counter { color: var(--muted); font-size: 0.9rem; min-width: 50px; text-align: center; }
+</style>
+</head>
+<body>
+
+<div class="deck">
+
+  <!-- Slide 1 -->
+  <section class="slide active">
+    <div class="content">
+      <h1>Scraping TabNet</h1>
+      <h2>Extração e tratamento de dados de produção ambulatorial do SUS</h2>
+      <p class="subtitle">DATASUS · Playwright · PostgreSQL</p>
+      <p class="author">Apresentação técnica — IESB</p>
+    </div>
+  </section>
+
+  <!-- Slide 2 -->
+  <section class="slide">
+    <div class="content">
+      <h2>Contexto: o que é o TabNet?</h2>
+      <ul>
+        <li>Sistema do <strong>DATASUS</strong> (Ministério da Saúde) para tabulação de dados públicos de saúde.</li>
+        <li>Disponibiliza estatísticas de mortalidade, morbidade, produção hospitalar e <strong>ambulatorial</strong>.</li>
+        <li>Interface web antiga (CGI), formulários HTML, sem API pública.</li>
+        <li>Dados de interesse: <em>Produção Ambulatorial do SUS</em> por município e subgrupo de procedimento.</li>
+      </ul>
+      <div class="callout">
+        Problema: dados ricos, mas só acessíveis por formulário web → necessidade de scraping.
+      </div>
+    </div>
+  </section>
+
+  <!-- Slide 3 -->
+  <section class="slide">
+    <div class="content">
+      <h2>Arquitetura da solução</h2>
+      <div class="flow">
+        <div class="box">DATASUS<br><small>tabnet.datasus.gov.br</small></div>
+        <div class="arrow">→</div>
+        <div class="box">scraper.py<br><small>Playwright</small></div>
+        <div class="arrow">→</div>
+        <div class="box">output.csv<br><small>formato wide</small></div>
+        <div class="arrow">→</div>
+        <div class="box">load_db.py<br><small>pivot + filtro</small></div>
+        <div class="arrow">→</div>
+        <div class="box">PostgreSQL<br><small>tabela final</small></div>
+      </div>
+      <h3>Stack</h3>
+      <ul>
+        <li><strong>Playwright</strong> — automação de navegador (Chromium headless)</li>
+        <li><strong>BeautifulSoup + lxml</strong> — parsing do HTML de resposta</li>
+        <li><strong>psycopg2</strong> — cliente PostgreSQL</li>
+        <li><strong>uv</strong> — gerenciamento de dependências e ambiente</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- Slide 4 -->
+  <section class="slide">
+    <div class="content">
+      <h2>Como funciona o scraping</h2>
+      <ol>
+        <li>Usuário informa <strong>período inicial e final</strong> (MM/AAAA).</li>
+        <li>Playwright abre o Chromium e navega até o formulário do TabNet.</li>
+        <li>Configura campos fixos: <code>Linha = Município</code>, <code>Coluna = Subgrupo_proced.</code>, <code>Formato = prn</code> (CSV ;).</li>
+        <li>Para cada mês × {Qtd.aprovada, Valor_aprovado} (50 queries):
+          <ul>
+            <li>Seleciona o conteúdo e o período</li>
+            <li>Submete o formulário, captura o popup</li>
+            <li>Extrai a tabela do <code>&lt;pre&gt;</code> de resposta</li>
+          </ul>
+        </li>
+        <li>Grava cada lote no <code>output.csv</code> incrementalmente.</li>
+        <li>Delay de 10s entre requisições (boas práticas).</li>
+      </ol>
+    </div>
+  </section>
+
+  <!-- Slide 5 -->
+  <section class="slide">
+    <div class="content">
+      <h2>Dados brutos (output.csv)</h2>
+      <p>Formato <strong>wide</strong>: subgrupos como colunas, uma linha por (período, conteúdo, município).</p>
+      <pre class="code">Período;Conteúdo;Município;0101 Ações...;0102 Vigilância...;...;Total
+Jan/2024;Qtd.aprovada;110001 ALTA FLORESTA;139;165;...;48352
+Jan/2024;Valor_aprovado;110001 ALTA FLORESTA;-;-;...;102441,38
+Jan/2024;Qtd.aprovada;Total;...;...;...
+Jan/2024;Qtd.aprovada;000000 Ignorado;-;-;...;-</pre>
+      <ul>
+        <li>~252.000 linhas brutas</li>
+        <li>52 colunas de subgrupos (incluindo "Total")</li>
+        <li>Inclui linhas de "Total" e "Ignorado" — descartadas no tratamento</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- Slide 6 -->
+  <section class="slide">
+    <div class="content">
+      <h2>Tratamento de dados (load_db.py)</h2>
+      <ol>
+        <li><strong>Extração de códigos:</strong> regex pega o número no início do nome do subgrupo<br>
+          <code>"0101 Ações de promoção..."</code> → <code>0101</code></li>
+        <li><strong>Filtro:</strong> remove linhas com município contendo "Total" ou "ignorado".</li>
+        <li><strong>Pivot:</strong> cada combinação (período, município) vira uma única linha. Os dois conteúdos (Qtd.aprovada / Valor_aprovado) se transformam em pares de colunas:
+          <pre class="code">qtd_0101, val_0101, qtd_0102, val_0102, ..., qtd_0803, val_0803</pre>
+        </li>
+        <li><strong>Schema dinâmico:</strong> a tabela é recriada com colunas baseadas nos subgrupos detectados no CSV.</li>
+        <li><strong>Upsert:</strong> <code>INSERT ... ON CONFLICT (periodo, municipio) DO UPDATE</code> permite re-execução idempotente.</li>
+      </ol>
+    </div>
+  </section>
+
+  <!-- Slide 7 -->
+  <section class="slide">
+    <div class="content">
+      <h2>Estrutura final</h2>
+      <pre class="code">CREATE TABLE producao_ambulatorial (
+    periodo     VARCHAR(10) NOT NULL,
+    municipio   TEXT        NOT NULL,
+    qtd_0101 TEXT, val_0101 TEXT,
+    qtd_0102 TEXT, val_0102 TEXT,
+    ...
+    qtd_0803 TEXT, val_0803 TEXT,
+    PRIMARY KEY (periodo, municipio)
+);</pre>
+      <div class="stats">
+        <div class="stat"><span class="num">139.275</span><span>linhas finais</span></div>
+        <div class="stat"><span class="num">51</span><span>subgrupos</span></div>
+        <div class="stat"><span class="num">102</span><span>colunas dinâmicas</span></div>
+        <div class="stat"><span class="num">~5.500</span><span>municípios</span></div>
+      </div>
+      <p>Cada linha agora cruza diretamente quantidade e valor por subgrupo — pronto para análise dimensional.</p>
+    </div>
+  </section>
+
+  <!-- Slide 8 -->
+  <section class="slide">
+    <div class="content">
+      <h2>Conclusão</h2>
+      <ul>
+        <li><strong>Reprodutível:</strong> CLI parametrizada, dependências travadas em <code>uv.lock</code>.</li>
+        <li><strong>Resiliente:</strong> erros por requisição não interrompem a coleta; gravação incremental no CSV.</li>
+        <li><strong>Idempotente:</strong> upsert na carga permite re-execução sem duplicar.</li>
+        <li><strong>Flexível:</strong> schema gerado a partir dos dados, adapta-se a novos subgrupos.</li>
+      </ul>
+      <h3>Próximos passos</h3>
+      <ul>
+        <li>Conversão de tipos (TEXT → NUMERIC) com tratamento do separador decimal brasileiro.</li>
+        <li>Dashboards (Metabase / Power BI) sobre a tabela final.</li>
+        <li>Agendamento mensal automático.</li>
+      </ul>
+      <p class="thanks">Obrigado!</p>
+    </div>
+  </section>
+
+</div>
+
+<nav class="nav">
+  <button id="prev">←</button>
+  <span id="counter">1 / 8</span>
+  <button id="next">→</button>
+</nav>
+
+<script>
+const slides = document.querySelectorAll('.slide');
+const counter = document.getElementById('counter');
+let current = 0;
+
+function show(i) {
+  slides[current].classList.remove('active');
+  current = (i + slides.length) % slides.length;
+  slides[current].classList.add('active');
+  counter.textContent = `${current + 1} / ${slides.length}`;
+}
+
+document.getElementById('prev').onclick = () => show(current - 1);
+document.getElementById('next').onclick = () => show(current + 1);
+document.addEventListener('keydown', e => {
+  if (e.key === 'ArrowRight' || e.key === ' ') show(current + 1);
+  if (e.key === 'ArrowLeft') show(current - 1);
+});
+</script>
+
+</body>
+</html>

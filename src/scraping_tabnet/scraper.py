@@ -21,19 +21,33 @@ CONTENTS = [
 ]
 
 
-def generate_periods() -> list[tuple[str, str]]:
-    """Retorna lista de (label, filename) para Jan/2024 a Jan/2026 (25 meses)."""
+def generate_periods(start_month: int, start_year: int, end_month: int, end_year: int) -> list[tuple[str, str]]:
+    """Retorna lista de (label, filename) do período informado."""
     periods = []
-    for month in range(1, 13):
-        label = f"{MONTHS_PT[month - 1]}/2024"
-        filename = f"qabr24{month:02d}.dbf"
+    year, month = start_year, start_month
+    while (year, month) <= (end_year, end_month):
+        label = f"{MONTHS_PT[month - 1]}/{year}"
+        filename = f"qabr{year % 100:02d}{month:02d}.dbf"
         periods.append((label, filename))
-    for month in range(1, 13):
-        label = f"{MONTHS_PT[month - 1]}/2025"
-        filename = f"qabr25{month:02d}.dbf"
-        periods.append((label, filename))
-    periods.append(("Jan/2026", "qabr2601.dbf"))
-    return periods  # 25 itens
+        month += 1
+        if month > 12:
+            month = 1
+            year += 1
+    return periods
+
+
+def ask_period(prompt: str) -> tuple[int, int]:
+    """Pede mês/ano ao usuário no formato MM/AAAA."""
+    while True:
+        raw = input(prompt).strip()
+        try:
+            month, year = raw.split("/")
+            m, y = int(month), int(year)
+            if 1 <= m <= 12 and y >= 2000:
+                return m, y
+        except ValueError:
+            pass
+        print("Formato inválido. Use MM/AAAA (ex: 01/2024)")
 
 
 def deselect_all(page: Page, selector: str) -> None:
@@ -94,7 +108,9 @@ def extract_pre(popup_page: Page) -> list[list[str]]:
 
 
 def main() -> None:
-    periods = generate_periods()
+    start_month, start_year = ask_period("Data de início (MM/AAAA): ")
+    end_month, end_year = ask_period("Data final (MM/AAAA): ")
+    periods = generate_periods(start_month, start_year, end_month, end_year)
     total = len(periods) * len(CONTENTS)
     print(f"Total de queries: {total} ({len(periods)} meses × {len(CONTENTS)} conteúdos)")
 
@@ -108,7 +124,7 @@ def main() -> None:
     ):
         writer = csv.writer(f, delimiter=";")
 
-        browser = p.chromium.launch(headless=False)
+        browser = p.chromium.launch(headless=True)
         context = browser.new_context()
         page = context.new_page()
 
