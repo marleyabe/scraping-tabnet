@@ -46,6 +46,13 @@ Pivota qtd/val em colunas separadas, filtra "Total" e "Ignorado", e recria a tab
 uv run load-db
 ```
 
+### 3. Dashboard Streamlit
+Relatório interativo com análise de `dados_tratados.csv` (visão geral, ranking de subgrupos SIGTAP, geografia por UF/município, série temporal, comparador e explorador).
+
+```bash
+uv run streamlit run src/scraping_tabnet/dashboard.py
+```
+
 ## Estrutura final da tabela
 
 ```sql
