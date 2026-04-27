@@ -207,3 +207,23 @@ marimo/_lsp/
 __marimo__/
 
 output.csv
+output.csv.bak*
+dados_tratados.csv
+
+# Dados brutos do scraper (re-geráveis com `uv run scrape`)
+data/
+
+# Diretórios temporários
+.tmp/
+.claude/
+
+# Template/fontes do relatório LaTeX (apenas o PDF compilado vai pro git)
+CIA046 - Template para Relatório Técnico (2026)/
+*.aux
+*.toc
+*.lof
+*.lot
+*.bbl
+*.blg
+*.out
+*.synctex.gz
